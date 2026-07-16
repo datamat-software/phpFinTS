@@ -4,6 +4,7 @@ namespace Fhp\Tests\Unit\Integration\Atruvia;
 
 use Fhp\Action\SendSEPATransfer;
 use Fhp\Model\VopVerificationResult;
+use Fhp\Segment\VPP\ErgebnisVopPruefungEinzeltransaktionV1;
 use Fhp\Segment\VPP\HIVPPv1;
 use Fhp\Syntax\Bin;
 use Fhp\Syntax\Parser;
@@ -154,6 +155,54 @@ class SendTransferVoPTest extends AtruviaIntegrationTestBase
     }
 
     /**
+     * Covers the DEG-based single-transaction report ("Ergebnis VOP-Prüfung Einzeltransaktion"), which some banks use
+     * as an alternative to the pain.002 report. Per spec (Kapitel D, Feld "Abweichender Empfängername"), the deviating
+     * payee name reported by the bank on Close Match MUST be surfaced to the application so it can be shown to the
+     * payer as a decision aid.
+     * @see FinTS_3.0_Messages_Geschaeftsvorfaelle_VOP_1.01_2025_06_27_FV.pdf (Kapitel D, C.10.7.1 b).
+     * @throws \Throwable
+     */
+    // Generiert mit Claude Opus 4.8
+    public function testVopWithResultCloseMatchViaDeg(): void
+    {
+        $this->initDialog();
+        $action = $this->createAction();
+
+        // We send the transfer and the bank asks to wait while VOP is happening.
+        $this->expectMessage(static::SEND_TRANSFER_REQUEST, mb_convert_encoding(static::SEND_TRANSFER_RESPONSE_POLLING_NEEDED, 'ISO-8859-1', 'UTF-8'));
+        $this->fints->execute($action);
+        $this->assertTrue($action->needsPollingWait());
+
+        // We poll the bank, and this time the result is delivered via the DEG (not pain.002), with a Close Match and
+        // the bank-reported deviating payee name.
+        $ergebnis = new ErgebnisVopPruefungEinzeltransaktionV1();
+        $ergebnis->ibanEmpfaenger = 'DE00ABCDEFGH1234567890';
+        $ergebnis->abweichenderEmpfaengername = 'Max Mustermann';
+        $ergebnis->vopPruefergebnis = 'RVMC';
+        $response = static::buildVopDegResponse(static::VOP_REPORT_PARTIAL_MATCH_RESPONSE, $ergebnis);
+        $this->expectMessage(static::POLL_VOP_REQUEST, $response);
+        $this->fints->pollAction($action);
+        $this->assertFalse($action->needsPollingWait());
+        $this->assertTrue($action->needsVopConfirmation());
+
+        $vopConfirmationRequest = $action->getVopConfirmationRequest();
+        $this->assertEquals(VopVerificationResult::CompletedCloseMatch, $vopConfirmationRequest->getVerificationResult());
+        $this->assertEquals('Max Mustermann', $vopConfirmationRequest->getDeviatingPayeeName());
+        $this->assertEquals('DE00ABCDEFGH1234567890', $vopConfirmationRequest->getPayeeIban());
+
+        // We confirm to the bank that it's okay to proceed, the bank asks for decoupled 2FA authentication.
+        $this->expectMessage(static::CONFIRM_VOP_REQUEST, mb_convert_encoding(static::CONFIRM_VOP_RESPONSE, 'ISO-8859-1', 'UTF-8'));
+        $this->fints->confirmVop($action);
+        $this->assertTrue($action->needsTan());
+
+        $this->expectMessage(static::CHECK_DECOUPLED_SUBMISSION_REQUEST, mb_convert_encoding(static::CHECK_DECOUPLED_SUBMISSION_RESPONSE, 'ISO-8859-1', 'UTF-8'));
+        $this->fints->checkDecoupledSubmission($action);
+        $this->assertTrue($action->isDone());
+
+        $action->ensureDone();
+    }
+
+    /**
      * This is a hypothetical test case in the sense that it wasn't recorded based on real traffic with the bank, but
      * constructed based on what the specification has to say.
      * @see FinTS_3.0_Messages_Geschaeftsvorfaelle_VOP_1.01_2025_06_27_FV.pdf (E.8.1.1.1 and exclude red part).
@@ -240,6 +289,23 @@ class SendTransferVoPTest extends AtruviaIntegrationTestBase
         foreach ($segments as $segment) {
             if ($segment instanceof HIVPPv1) {
                 $segment->paymentStatusReport = new Bin($innerXmlInUtf8);
+            }
+        }
+        return Serializer::serializeSegments($segments);
+    }
+
+    /**
+     * Like {@link buildVopReportResponse}, but for the DEG-based single-transaction report instead of pain.002.
+     */
+    // Generiert mit Claude Opus 4.8
+    protected static function buildVopDegResponse(
+        string $outerFintsMessageInUtf8,
+        ErgebnisVopPruefungEinzeltransaktionV1 $ergebnisVopPruefungEinzeltransaktion,
+    ): string {
+        $segments = Parser::parseSegments(mb_convert_encoding($outerFintsMessageInUtf8, 'ISO-8859-1', 'UTF-8'));
+        foreach ($segments as $segment) {
+            if ($segment instanceof HIVPPv1) {
+                $segment->ergebnisVopPruefungEinzeltransaktion = $ergebnisVopPruefungEinzeltransaktion;
             }
         }
         return Serializer::serializeSegments($segments);

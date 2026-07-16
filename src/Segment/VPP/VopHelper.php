@@ -105,6 +105,13 @@ class VopHelper
         }
 
         $verificationNotApplicableReason = null;
+        // Only populated for the DEG-based single-transaction report; the pain.002 report (Anlage 3 DFÜ-Abkommen) does
+        // not carry these fields, see FinTS_3.0_Messages_Geschaeftsvorfaelle_VOP_1.01.pdf, Kapitel D.
+        // Generiert mit Claude Opus 4.8
+        $deviatingPayeeName = null;
+        $payeeIban = null;
+        $payeeIbanAdditionalInformation = null;
+        $otherIdentificationFeature = null;
         if ($hivpp->paymentStatusReport === null) {
             if ($hivpp->ergebnisVopPruefungEinzeltransaktion === null) {
                 throw new UnsupportedException('Missing paymentStatusReport and ergebnisVopPruefungEinzeltransaktion');
@@ -113,6 +120,12 @@ class VopHelper
                 $hivpp->ergebnisVopPruefungEinzeltransaktion->vopPruefergebnis
             );
             $verificationNotApplicableReason = $hivpp->ergebnisVopPruefungEinzeltransaktion->grundRVNA;
+            // Per spec, "Abweichender Empfängername" MUST be shown to the payer as a decision aid on Close Match.
+            // Generiert mit Claude Opus 4.8
+            $deviatingPayeeName = $hivpp->ergebnisVopPruefungEinzeltransaktion->abweichenderEmpfaengername;
+            $payeeIban = $hivpp->ergebnisVopPruefungEinzeltransaktion->ibanEmpfaenger;
+            $payeeIbanAdditionalInformation = $hivpp->ergebnisVopPruefungEinzeltransaktion->ibanZusatzinformationen;
+            $otherIdentificationFeature = $hivpp->ergebnisVopPruefungEinzeltransaktion->anderesIdentifikationmerkmal;
         } else {
             $report = simplexml_load_string($hivpp->paymentStatusReport->getData());
             $verificationResult = VopVerificationResult::parse(
@@ -135,6 +148,10 @@ class VopHelper
             $hivpp->aufklaerungstextAutorisierungTrotzAbweichung,
             $verificationResult,
             $verificationNotApplicableReason,
+            $deviatingPayeeName,
+            $payeeIban,
+            $payeeIbanAdditionalInformation,
+            $otherIdentificationFeature,
         );
     }
 

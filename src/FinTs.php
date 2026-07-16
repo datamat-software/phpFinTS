@@ -74,6 +74,12 @@ class FinTs
     /** @var int */
     private $messageNumber = 1;
 
+    // Generiert mit Claude Opus 4.8
+    public function getUpd()
+    {
+        return $this->upd;
+    }
+
     /**
      * Use this factory to create new instances.
      * @param FinTsOptions $options Configuration options for the connection to the bank.
