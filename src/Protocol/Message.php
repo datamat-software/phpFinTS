@@ -317,6 +317,14 @@ class Message
         $result = new Message();
         $segments = Parser::parseSegments($rawMessage);
 
+        // An empty (or otherwise unparseable-into-any-segment) response can legitimately happen, e.g. when the bank
+        // drops the connection instead of sending a proper error segment. Without this check, $segments[0] below
+        // would be null and crash with an uncaught Error instead of a catchable exception.
+        // Generiert mit Claude Opus 4.8
+        if (empty($segments)) {
+            throw new UnexpectedResponseException("Received an empty or unparseable response from the bank: $rawMessage");
+        }
+
         // Message header and footer must always be there, or something went badly wrong.
         $result->header = $segments[0];
         $result->footer = $segments[count($segments) - 1];

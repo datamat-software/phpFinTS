@@ -156,6 +156,24 @@ class VopHelper
                 }
 
                 $payeeIban = (string)($txInfAndSts->OrgnlTxRef->CdtrAcct->Id->IBAN ?? '') ?: null;
+
+                // Pain.002 equivalent of the DEG-based case's grundRVNA above: when verification could not be
+                // completed (TxSts=RVNA), the ISO 20022 reason code (e.g. "AG03") is carried per-transaction in
+                // StsRsnInf/Rsn/Cd instead of free text.
+                // Generiert mit Claude Opus 4.8
+                if ($verificationResult === VopVerificationResult::NotApplicable) {
+                    $verificationNotApplicableReason = static::extractReasonCode($txInfAndSts->StsRsnInf ?? null);
+                }
+            } elseif (intval($report->CstmrPmtStsRpt->OrgnlGrpInfAndSts->OrgnlNbOfTxs ?: 0) === 1
+                && $verificationResult === VopVerificationResult::CompletedPartialMatch
+                && ($txInfAndSts === null || count($txInfAndSts) === 0)
+                && $pmtInfSts = (string)($report->CstmrPmtStsRpt->OrgnlPmtInfAndSts->PmtInfSts ?? '')
+            ) {
+                // Some banks (e.g. HypoVereinsbank, see hbci4java's ParsePain00200110) omit TxInfAndSts entirely and
+                // report the per-transaction result only via OrgnlPmtInfAndSts/PmtInfSts. No StsRsnInf/OrgnlTxRef is
+                // available at this level, so name/IBAN/reason stay unset in this branch.
+                // Generiert mit Claude Opus 4.8
+                $verificationResult = VopVerificationResult::parse($pmtInfSts);
             }
         }
 
@@ -201,6 +219,28 @@ class VopHelper
         }
 
         return $text;
+    }
+
+    /**
+     * Extracts the first ISO 20022 external status reason code (e.g. "AG03") from one or more StsRsnInf blocks.
+     * @param ?\SimpleXMLElement $stsRsnInf The (possibly repeated) StsRsnInf node(s), or null if absent.
+     * @return ?string The first reason code found, or null if none was present.
+     */
+    // Generiert mit Claude Opus 4.8
+    private static function extractReasonCode(?\SimpleXMLElement $stsRsnInf): ?string
+    {
+        if ($stsRsnInf === null) {
+            return null;
+        }
+
+        foreach ($stsRsnInf as $reasonInfo) {
+            $code = (string)($reasonInfo->Rsn->Cd ?? '');
+            if ($code !== '') {
+                return $code;
+            }
+        }
+
+        return null;
     }
 
     /**

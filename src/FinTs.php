@@ -844,6 +844,19 @@ class FinTs
         return $this->bpd;
     }
 
+    /**
+     * Injects a previously obtained {@link BPD} (e.g. from an application-level cache keyed by institute/bank code),
+     * so that {@link ensureBpdAvailable()} skips fetching it fresh via an anonymous dialog. The BPD only describes
+     * the bank's own configuration/capabilities - it is not tied to any particular customer - so it is safe to
+     * reuse across different users of the same bank, and across PHP processes/requests.
+     * @param BPD $bpd A BPD previously returned by {@link getBpd()} (usually from an earlier PHP process/instance).
+     */
+    // Generiert mit Claude Opus 4.8
+    public function setCachedBpd(BPD $bpd): void
+    {
+        $this->bpd = $bpd;
+    }
+
     // ------------------------------------------------- IMPLEMENTATION ------------------------------------------------
 
     /**
@@ -1120,11 +1133,24 @@ class FinTs
         } catch (CurlException $e) {
             // Ignore, we want to disconnect anyway.
         } catch (ServerException $e) {
-            if ($e->hasError(Rueckmeldungscode::ABGEBROCHEN)) {
-                // We wanted to end the dialog, but the server already canceled it before.
+            if ($isAnonymous || $e->hasError(Rueckmeldungscode::ABGEBROCHEN)) {
+                // We wanted to end the dialog, but the server already canceled it before. For the anonymous
+                // (BPD-fetch) dialog specifically, this is always non-fatal: its useful data (the BPD) was already
+                // read from the preceding response, so a failure to cleanly close it afterwards is pure best-effort
+                // housekeeping, not something the caller needs to know about.
+                // Generiert mit Claude Opus 4.8
                 $this->logger->warning("Dialog already ended: $e");
             } else {
                 // Something else went wrong.
+                throw $e;
+            }
+        } catch (UnexpectedResponseException $e) {
+            // Same reasoning as above (empty/malformed response instead of a proper BEENDET confirmation) - only
+            // ever non-fatal for the anonymous BPD-fetch dialog.
+            // Generiert mit Claude Opus 4.8
+            if ($isAnonymous) {
+                $this->logger->warning("Failed to cleanly end anonymous dialog: $e");
+            } else {
                 throw $e;
             }
         } finally {

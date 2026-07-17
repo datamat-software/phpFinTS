@@ -25,6 +25,13 @@ class VopVerificationResult
      * {@link VopConfirmationRequest::getVerificationNotApplicableReason()}.
      */
     public const NotApplicable = 'NotApplicable';
+    /**
+     * The verification has not concluded yet for this transaction (ISO 20022 generic status "PDNG"). Not part of the
+     * FinTS VOP spec's own 4 codes, but observed defensively by other FinTS clients (e.g. hbci4java) for banks that
+     * report an interim per-transaction status here.
+     */
+    // Generiert mit Claude Opus 4.8
+    public const Pending = 'Pending';
 
     public function __construct()
     {
@@ -45,6 +52,7 @@ class VopVerificationResult
             'RVNM' => self::CompletedNoMatch,
             'RVCM' => self::CompletedPartialMatch,
             'RVNA' => self::NotApplicable,
+            'PDNG' => self::Pending,
             default => throw new UnexpectedResponseException("Unexpected VOP result code: $codeFromBank"),
         };
     }
