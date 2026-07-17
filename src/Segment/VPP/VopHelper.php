@@ -133,12 +133,29 @@ class VopHelper
             );
 
             // For a single transaction, we can do better than "CompletedPartialMatch",
-            // which can indicate either CompletedCloseMatch or CompletedNoMatch
+            // which can indicate either CompletedCloseMatch or CompletedNoMatch. In this case, the
+            // report also carries transaction-level detail (StsRsnInf/AddtlInf, OrgnlTxRef) that is
+            // not available at the group level.
+            // Generiert mit Claude Opus 4.8
+            $txInfAndSts = $report->CstmrPmtStsRpt->OrgnlPmtInfAndSts->TxInfAndSts ?? null;
             if (intval($report->CstmrPmtStsRpt->OrgnlGrpInfAndSts->OrgnlNbOfTxs ?: 0) === 1
                 && $verificationResult === VopVerificationResult::CompletedPartialMatch
-                && $verificationResultCode = $report->CstmrPmtStsRpt->OrgnlPmtInfAndSts->TxInfAndSts?->TxSts
+                && $txInfAndSts !== null
+                && $verificationResultCode = $txInfAndSts->TxSts
             ) {
                 $verificationResult = VopVerificationResult::parse($verificationResultCode);
+
+                // Per FinTS_3.0_Messages_Geschaeftsvorfaelle_VOP_1.01, Kapitel D / Anlage 3 DFÜ-Abkommen:
+                // on Close Match, some banks report the name on file as free text in
+                // OrgnlPmtInfAndSts/TxInfAndSts/StsRsnInf/AddtlInf. Note that OrgnlTxRef/Cdtr/Pty/Nm below is
+                // NOT that corrected name - it only echoes back the name/IBAN we originally submitted.
+                // Generiert mit Claude Opus 4.8
+                $correctedName = static::extractAddtlInfText($txInfAndSts->StsRsnInf ?? null);
+                if ($correctedName !== '') {
+                    $deviatingPayeeName = $correctedName;
+                }
+
+                $payeeIban = (string)($txInfAndSts->OrgnlTxRef->CdtrAcct->Id->IBAN ?? '') ?: null;
             }
         }
 
@@ -153,6 +170,37 @@ class VopHelper
             $payeeIbanAdditionalInformation,
             $otherIdentificationFeature,
         );
+    }
+
+    /**
+     * Concatenates the free-text AddtlInf lines of one or more StsRsnInf blocks, stripping a leading quote
+     * character from each line - mirrors how established FinTS clients (e.g. Hibiscus/HBCI4Java's
+     * ParsePain00200110) extract the bank-corrected payee name that some banks put here on VOP Close Match.
+     * @param ?\SimpleXMLElement $stsRsnInf The (possibly repeated) StsRsnInf node(s), or null if absent.
+     * @return string The concatenated text, or '' if none was present.
+     */
+    // Generiert mit Claude Opus 4.8
+    private static function extractAddtlInfText(?\SimpleXMLElement $stsRsnInf): string
+    {
+        if ($stsRsnInf === null) {
+            return '';
+        }
+
+        $text = '';
+        foreach ($stsRsnInf as $reasonInfo) {
+            foreach ($reasonInfo->AddtlInf ?? [] as $line) {
+                $line = trim((string)$line);
+                foreach (["\"", "\u{201C}"] as $quote) { // straight and curly opening quote
+                    if (str_starts_with($line, $quote)) {
+                        $line = substr($line, strlen($quote));
+                        break;
+                    }
+                }
+                $text .= $line;
+            }
+        }
+
+        return $text;
     }
 
     /**
