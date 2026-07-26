@@ -16,6 +16,13 @@ class VopConfirmationRequestImpl implements VopConfirmationRequest
     private ?string $payeeIban;
     private ?string $payeeIbanAdditionalInformation;
     private ?string $otherIdentificationFeature;
+    /** @var VopTransactionResult[] */
+    private array $transactionResults;
+    /** @var int[] */
+    private array $transactionStatusCounts;
+    /** @var string[] */
+    // Generiert mit Claude Opus 4.8
+    private array $groupInformationTexts;
 
     // Generiert mit Claude Opus 4.8
     public function __construct(
@@ -28,6 +35,9 @@ class VopConfirmationRequestImpl implements VopConfirmationRequest
         ?string $payeeIban = null,
         ?string $payeeIbanAdditionalInformation = null,
         ?string $otherIdentificationFeature = null,
+        array $transactionResults = [],
+        array $transactionStatusCounts = [],
+        array $groupInformationTexts = [],
     ) {
         $this->vopId = $vopId;
         $this->expiration = $expiration;
@@ -38,6 +48,9 @@ class VopConfirmationRequestImpl implements VopConfirmationRequest
         $this->payeeIban = $payeeIban;
         $this->payeeIbanAdditionalInformation = $payeeIbanAdditionalInformation;
         $this->otherIdentificationFeature = $otherIdentificationFeature;
+        $this->transactionResults = $transactionResults;
+        $this->transactionStatusCounts = $transactionStatusCounts;
+        $this->groupInformationTexts = $groupInformationTexts;
     }
 
     public function getVopId(): Bin
@@ -87,5 +100,23 @@ class VopConfirmationRequestImpl implements VopConfirmationRequest
     public function getOtherIdentificationFeature(): ?string
     {
         return $this->otherIdentificationFeature;
+    }
+
+    // Generiert mit Claude Opus 4.8
+    public function getTransactionResults(): array
+    {
+        return $this->transactionResults;
+    }
+
+    // Generiert mit Claude Opus 4.8
+    public function getTransactionStatusCounts(): array
+    {
+        return $this->transactionStatusCounts;
+    }
+
+    // Generiert mit Claude Opus 4.8
+    public function getGroupInformationTexts(): array
+    {
+        return $this->groupInformationTexts;
     }
 }

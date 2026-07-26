@@ -136,6 +136,18 @@ class SendSEPADirectDebit extends BaseAction
             parent::unserialize($parentSerialized);
     }
 
+    /**
+     * @return ?int The number of direct debits in the PAIN message, so that the bank can deliver the Verification of
+     *     Payee result for the whole (batch) order in one response, see {@link BaseAction::getVopMaxEntries()}.
+     */
+    // Generiert mit Claude Opus 4.8
+    public function getVopMaxEntries(): ?int
+    {
+        // Matches <DrctDbtTxInf>, <DrctDbtTxInf attr=...> and <DrctDbtTxInf/> alike.
+        $numberOfTransactions = preg_match_all('@<DrctDbtTxInf[\s>/]@', $this->painMessage);
+        return $numberOfTransactions > 0 ? $numberOfTransactions : null;
+    }
+
     protected function createRequest(BPD $bpd, ?UPD $upd)
     {
         $useSingleDirectDebit = $this->singleDirectDebit;

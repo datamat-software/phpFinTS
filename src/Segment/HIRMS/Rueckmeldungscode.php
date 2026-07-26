@@ -25,7 +25,7 @@ abstract class Rueckmeldungscode
      */
     public static function isSuccess(int $code): bool
     {
-        return 0 < $code && $code < 1000;
+        return 0 < $code && $code <= 1000;
     }
 
     // NOTE: FinTS v4 additionally knows "Hinweise" (similar to INFO level in logging) that are 1000..1999.
@@ -37,16 +37,21 @@ abstract class Rueckmeldungscode
      */
     public static function isWarning(int $code): bool
     {
-        return 3000 < $code && $code < 4000;
+        return 3000 <= $code && $code < 4000;
     }
 
     /**
      * @param int $code A code received from the server.
      * @return bool Whether it is a warning code (indicating that the action was rejected).
      */
+    // Bugfix (real-world find, 2026-07-26): war zuvor "9000 < $code", schloss den Code 9000 selbst aus. Ein
+    // Live-Test gegen fints2.atruvia.de lieferte HIRMS 9000 ("Weitere Verarbeitung des Auftrags aufgrund
+    // interner Probleme fehlgeschlagen") waehrend des VOP-Pollings - dieser (informativere) Text wurde dadurch
+    // stillschweigend verworfen, uebrig blieb nur der generische globale 9050-Text in der Exception-Message.
+    // Generiert mit Claude Opus 4.8
     public static function isError(int $code): bool
     {
-        return (9000 < $code && $code < 9999) || in_array($code, self::TREAT_WARNINGS_AS_ERRORS);
+        return (9000 <= $code && $code <= 9999) || in_array($code, self::TREAT_WARNINGS_AS_ERRORS);
     }
 
     /**

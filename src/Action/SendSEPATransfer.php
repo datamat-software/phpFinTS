@@ -101,6 +101,18 @@ class SendSEPATransfer extends BaseAction
             parent::unserialize($parentSerialized);
     }
 
+    /**
+     * @return ?int The number of credit transfers in the PAIN message, so that the bank can deliver the Verification
+     *     of Payee result for the whole (batch) order in one response, see {@link BaseAction::getVopMaxEntries()}.
+     */
+    // Generiert mit Claude Opus 4.8
+    public function getVopMaxEntries(): ?int
+    {
+        // Matches <CdtTrfTxInf>, <CdtTrfTxInf attr=...> and <CdtTrfTxInf/> alike.
+        $numberOfTransactions = preg_match_all('@<CdtTrfTxInf[\s>/]@', $this->painMessage);
+        return $numberOfTransactions > 0 ? $numberOfTransactions : null;
+    }
+
     protected function createRequest(BPD $bpd, ?UPD $upd)
     {
         // ANALYSE XML FOR RECEIPTS AND PAYMENT DATE

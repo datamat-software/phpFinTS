@@ -10,6 +10,7 @@ use Fhp\Segment\HIBPA\HIBPAv3;
 use Fhp\Segment\HIPINS\HIPINSv1;
 use Fhp\Segment\SegmentInterface;
 use Fhp\Segment\TAN\HITANS;
+use Fhp\Segment\VOO\HIVOOSv1;
 use Fhp\Segment\VPP\HIVPPSv1;
 
 /**
@@ -184,6 +185,29 @@ class BPD
 
         foreach ($requestSegments as $segment) {
             if (in_array($segment->getName(), $vopRequiredTypes)) {
+                return $segment->getName();
+            }
+        }
+        return null;
+    }
+
+    /**
+     * @param SegmentInterface[] $requestSegments The segments that shall be sent to the bank.
+     * @return string|null Identifier of the (first) segment for which the bank allows VoP Opt-Out according to
+     *     HIVOOS, or null if none of the segments allow Opt-Out.
+     */
+    // Generiert mit Claude Opus 4.8
+    public function vopOptOutAllowedForRequest(array $requestSegments): ?string
+    {
+        /** @var HIVOOSv1 $hivoos */
+        $hivoos = $this->getLatestSupportedParameters('HIVOOS');
+        $optOutAllowedTypes = $hivoos?->parameter?->optOutZahlungsverkehrsauftrag;
+        if ($optOutAllowedTypes === null) {
+            return null;
+        }
+
+        foreach ($requestSegments as $segment) {
+            if (in_array($segment->getName(), $optOutAllowedTypes)) {
                 return $segment->getName();
             }
         }

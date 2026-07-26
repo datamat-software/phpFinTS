@@ -7,6 +7,7 @@ namespace Fhp;
 use Fhp\Model\PollingInfo;
 use Fhp\Model\TanRequest;
 use Fhp\Model\VopConfirmationRequest;
+use Fhp\Model\VopReportAccumulator;
 use Fhp\Protocol\ActionIncompleteException;
 use Fhp\Protocol\ActionPendingException;
 use Fhp\Protocol\BPD;
@@ -58,6 +59,34 @@ abstract class BaseAction implements \Serializable
     /** If set, this action needs the user's confirmation to be completed. */
     protected ?VopConfirmationRequest $vopConfirmationRequest = null;
 
+    /**
+     * If set, the user has already confirmed the Verification of Payee result, but the corresponding HKVPA has not
+     * been sent to the bank yet because it has to travel together with the answer to a TAN challenge that the bank
+     * had already issued in the same response as the VOP result (see
+     * FinTS_3.0_Messages_Geschaeftsvorfaelle_VOP_1.01_2025_06_27_FV.pdf, Abbildung 3: "HKVPA (mit VOP-ID aus HIVPP)
+     * + HKTAN, Freigabe des Auftrags", without re-submitting the payment order).
+     */
+    // Generiert mit Claude Opus 4.8
+    protected ?VopConfirmationRequest $confirmedVopConfirmationRequest = null;
+
+    /**
+     * Collects the (possibly chunked and/or stepwise delivered) pain.002 payment status report of a Verification of
+     * Payee check across all HKVPP/HIVPP round trips of this action.
+     */
+    // Generiert mit Claude Opus 4.8
+    protected ?VopReportAccumulator $vopReportAccumulator = null;
+
+    /**
+     * If true, {@link FinTs::execute()} sends an HKVOO (VoP Opt-Out) segment alongside this action's request instead
+     * of an HKVPP (Verification of Payee), provided the bank's BPD allows Opt-Out for this action's request segment
+     * (see {@link \Fhp\Protocol\BPD::vopOptOutAllowedForRequest()}). Only meaningful for actions that submit a batch
+     * payment order (e.g. {@link \Fhp\Action\SendSEPATransfer}, {@link \Fhp\Action\SendSEPADirectDebit}) - the bank
+     * rejects Opt-Out for orders with only a single transaction.
+     * @see \Fhp\Segment\VOO\VooHelper
+     */
+    // Generiert mit Claude Opus 4.8
+    protected bool $vopOptOutRequested = false;
+
     protected bool $isDone = false;
 
     /**
@@ -98,6 +127,9 @@ abstract class BaseAction implements \Serializable
             $this->needTanForSegment,
             $this->pollingInfo,
             $this->vopConfirmationRequest,
+            $this->vopOptOutRequested,
+            $this->confirmedVopConfirmationRequest,
+            $this->vopReportAccumulator,
         ];
     }
 
@@ -120,7 +152,11 @@ abstract class BaseAction implements \Serializable
             $this->needTanForSegment,
             $this->pollingInfo,
             $this->vopConfirmationRequest,
-        ) = array_pad($serialized, 5, null);
+            $this->vopOptOutRequested,
+            $this->confirmedVopConfirmationRequest,
+            $this->vopReportAccumulator,
+        ) = array_pad($serialized, 8, null);
+        $this->vopOptOutRequested ??= false;
     }
 
     /**
@@ -170,6 +206,71 @@ abstract class BaseAction implements \Serializable
     public function getVopConfirmationRequest(): ?VopConfirmationRequest
     {
         return $this->vopConfirmationRequest;
+    }
+
+    /**
+     * Requests that {@link FinTs::execute()} submit this action with VoP Opt-Out (HKVOO) instead of a Verification
+     * of Payee check (HKVPP), if the bank's BPD allows Opt-Out for this action's request. Only meaningful for batch
+     * payment orders with more than one transaction - the bank rejects Opt-Out otherwise.
+     * @param bool $optOut Whether to request Opt-Out. Defaults to true.
+     * @return $this
+     */
+    // Generiert mit Claude Opus 4.8
+    public function requestVopOptOut(bool $optOut = true): static
+    {
+        $this->vopOptOutRequested = $optOut;
+        return $this;
+    }
+
+    // Generiert mit Claude Opus 4.8
+    public function isVopOptOutRequested(): bool
+    {
+        return $this->vopOptOutRequested;
+    }
+
+    /**
+     * @return ?int The number of transactions this action submits, if known. Used as the page size ("Maximale Anzahl
+     *     Einträge") of the Verification of Payee result delivery, so that the bank can return the result for the
+     *     whole order in one response instead of forcing extra Aufsetzpunkt round trips. Sub-classes that submit a
+     *     payment order should override this; null leaves the choice entirely to the bank.
+     */
+    // Generiert mit Claude Opus 4.8
+    public function getVopMaxEntries(): ?int
+    {
+        return null;
+    }
+
+    // Generiert mit Claude Opus 4.8
+    public function getVopReportAccumulator(): ?VopReportAccumulator
+    {
+        return $this->vopReportAccumulator;
+    }
+
+    /** To be called only by the FinTs instance that executes this action. */
+    // Generiert mit Claude Opus 4.8
+    final public function requireVopReportAccumulator(): VopReportAccumulator
+    {
+        return $this->vopReportAccumulator ??= new VopReportAccumulator();
+    }
+
+    /** To be called only by the FinTs instance that executes this action. */
+    // Generiert mit Claude Opus 4.8
+    final public function setVopReportAccumulator(?VopReportAccumulator $vopReportAccumulator): void
+    {
+        $this->vopReportAccumulator = $vopReportAccumulator;
+    }
+
+    // Generiert mit Claude Opus 4.8
+    public function getConfirmedVopConfirmationRequest(): ?VopConfirmationRequest
+    {
+        return $this->confirmedVopConfirmationRequest;
+    }
+
+    /** To be called only by the FinTs instance that executes this action. */
+    // Generiert mit Claude Opus 4.8
+    final public function setConfirmedVopConfirmationRequest(?VopConfirmationRequest $confirmedVopConfirmationRequest): void
+    {
+        $this->confirmedVopConfirmationRequest = $confirmedVopConfirmationRequest;
     }
 
     /**

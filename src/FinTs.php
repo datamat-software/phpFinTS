@@ -8,7 +8,6 @@ use Fhp\Model\TanMode;
 use Fhp\Model\VopConfirmationRequest;
 use Fhp\Model\VopConfirmationRequestImpl;
 use Fhp\Model\VopPollingInfo;
-use Fhp\Model\VopVerificationResult;
 use Fhp\Options\Credentials;
 use Fhp\Options\FinTsOptions;
 use Fhp\Options\SanitizingLogger;
@@ -30,6 +29,9 @@ use Fhp\Segment\TAN\HITAN;
 use Fhp\Segment\TAN\HKTAN;
 use Fhp\Segment\TAN\HKTANFactory;
 use Fhp\Segment\TAN\HKTANv6;
+use Fhp\Segment\VOO\HKVOOv1;
+use Fhp\Segment\VOO\VooHelper;
+use Fhp\Segment\VPP\HIVPPv1;
 use Fhp\Segment\VPP\HKVPPv1;
 use Fhp\Segment\VPP\VopHelper;
 use Fhp\Syntax\InvalidResponseException;
@@ -359,10 +361,16 @@ class FinTs
             }
         }
 
-        // Add HKVPP for VOP verification if necessary.
+        // Add HKVOO for VoP Opt-Out if the action requested it and the bank allows it for this request; otherwise
+        // add HKVPP for VOP verification if necessary. The two are mutually exclusive per request.
+        // Generiert mit Claude Opus 4.8
         $hkvpp = null;
-        if ($this->bpd?->vopRequiredForRequest($requestSegments) !== null) {
-            $hkvpp = VopHelper::createHKVPPForInitialRequest($this->bpd);
+        $hkvoo = null;
+        if ($action->isVopOptOutRequested() && $this->bpd?->vopOptOutAllowedForRequest($requestSegments) !== null) {
+            $hkvoo = VooHelper::createHKVOOForRequest();
+            $message->add($hkvoo);
+        } elseif ($this->bpd?->vopRequiredForRequest($requestSegments) !== null) {
+            $hkvpp = VopHelper::createHKVPPForInitialRequest($this->bpd, $action->getVopMaxEntries());
             $message->add($hkvpp);
         }
 
@@ -375,7 +383,7 @@ class FinTs
 
         // Execute the request.
         $response = $this->sendMessage($request);
-        $this->processServerResponse($action, $response, $hkvpp);
+        $this->processServerResponse($action, $response, $hkvpp, $hkvoo);
     }
 
     /**
@@ -384,12 +392,13 @@ class FinTs
      * @param BaseAction $action The action for which the request was sent.
      * @param Message $response The response we just got from the server.
      * @param HKVPPv1|null $hkvpp The HKVPP segment, if any was present in the request.
+     * @param HKVOOv1|null $hkvoo The HKVOO segment, if any was present in the request (VoP Opt-Out).
      * @throws CurlException When the connection fails in a layer below the FinTS protocol.
      * @throws UnexpectedResponseException When the server responds with a valid but unexpected message.
      * @throws ServerException When the server responds with a (FinTS-encoded) error message, which includes most things
      *      that can go wrong with the action itself, like wrong credentials, invalid IBANs, locked accounts, etc.
      */
-    private function processServerResponse(BaseAction $action, Message $response, ?HKVPPv1 $hkvpp = null): void
+    private function processServerResponse(BaseAction $action, Message $response, ?HKVPPv1 $hkvpp = null, ?HKVOOv1 $hkvoo = null): void
     {
         $this->readBPD($response);
 
@@ -414,6 +423,16 @@ class FinTs
 
         // Detect if the bank needs us to do something for Verification of Payee.
         if ($hkvpp != null) {
+            // Collect the payment status report of this response first: it may be one chunk of a pain.002 that is too
+            // large for a single message, and/or one of several stepwise deliveries - in both cases the complete
+            // result only emerges across several Aufsetzpunkt round trips. See VopReportAccumulator.
+            // Generiert mit Claude Opus 4.8
+            /** @var ?HIVPPv1 $hivpp */
+            $hivpp = $response->findSegment(HIVPPv1::class);
+            if ($hivpp?->paymentStatusReport !== null) {
+                VopHelper::accumulatePaymentStatusReport($this->bpd, $hivpp, $action->requireVopReportAccumulator());
+            }
+
             if ($pollingInfo = VopHelper::checkPollingRequired($response, $hkvpp->getSegmentNumber())) {
                 $action->setPollingInfo($pollingInfo);
                 if ($action->needsTan()) {
@@ -421,17 +440,39 @@ class FinTs
                 }
                 return;
             }
-            if ($confirmationRequest = VopHelper::checkVopConfirmationRequired($response, $hkvpp->getSegmentNumber())) {
+            $confirmationRequest = VopHelper::checkVopConfirmationRequired(
+                $response, $hkvpp->getSegmentNumber(), $action->getVopReportAccumulator());
+            if ($confirmationRequest) {
                 $action->setVopConfirmationRequest($confirmationRequest);
-                if ($action->needsTan()) {
-                    if ($confirmationRequest->getVerificationResult() === VopVerificationResult::CompletedFullMatch) {
-                        // If someone hits this branch in practice, we can implement it.
-                        throw new UnsupportedException('Combined VOP match confirmation and TAN request');
-                    }
-                    throw new UnexpectedResponseException(
-                        'Unexpected TAN request on VOP result: ' . $confirmationRequest->getVerificationResult()
-                    );
+                $action->setVopReportAccumulator(null); // Fully consumed, so don't carry it along any further.
+
+                // Rueckmeldungscode 3945 "Freigabe kann nicht erteilt werden" means the bank invalidated the HKTAN we
+                // sent along, and expects the payment order to be submitted again together with a fresh HKTAN and the
+                // HKVPA - which is exactly what confirmVop() does. Per the spec this can happen for ANY verification
+                // result (the flow is driven by the Rueckmeldungscodes, not by the result in HIVPP), so the TAN
+                // request from this response has to be dropped rather than answered.
+                // @see FinTS_3.0_Messages_Geschaeftsvorfaelle_VOP_1.01_2025_06_27_FV.pdf, Section E.8.1, item 5
+                // Generiert mit Claude Opus 4.8
+                if ($action->needsTan()
+                    && $response->findRueckmeldung(Rueckmeldungscode::FREIGABE_KANN_NICHT_ERTEILT_WERDEN) !== null) {
+                    $action->setTanRequest(null);
                 }
+                // Otherwise, a TAN challenge in the same response is the regular flow whenever the bank did NOT send
+                // Rueckmeldungscode 3091: the user first acknowledges the VOP result, and the resulting HKVPA is then
+                // sent together with the answer to this challenge, without re-submitting the payment order.
+                // @see the same document, Abbildung 3 (Match) and Abbildung 5 (Opt-Out), "hellrot" steps
+                // See confirmVop() and submitTan() for the two halves of that flow.
+            }
+        }
+
+        // Detect if the bank confirms a VoP Opt-Out. Unlike the HKVPP/Match case above, a combined confirmation
+        // request and TAN request in the same response is the normal, expected flow for Opt-Out (see
+        // FinTS_3.0_Messages_Geschaeftsvorfaelle_VOP_1.01_2025_06_27_FV.pdf, Abbildung 5), so there is no conflict
+        // check here.
+        // Generiert mit Claude Opus 4.8
+        if ($hkvoo != null) {
+            if ($confirmationRequest = VooHelper::checkVooConfirmationRequired($response, $hkvoo->getSegmentNumber())) {
+                $action->setVopConfirmationRequest($confirmationRequest);
             }
         }
 
@@ -500,11 +541,19 @@ class FinTs
         }
         $message = MessageBuilder::create()
             ->add(HKTANFactory::createProzessvariante2Step2($tanMode, $tanRequest->getProcessId()));
+        // If the user has confirmed a Verification of Payee result that the bank reported together with this very TAN
+        // challenge, the corresponding HKVPA goes into this message, see confirmVop().
+        // Generiert mit Claude Opus 4.8
+        $confirmedVopConfirmationRequest = $action->getConfirmedVopConfirmationRequest();
+        if ($confirmedVopConfirmationRequest instanceof VopConfirmationRequestImpl) {
+            $message->add(VopHelper::createHKVPAForConfirmation($confirmedVopConfirmationRequest));
+        }
         $request = $this->buildMessage($message, $tanMode, $tan);
 
         // Execute the request.
         $response = $this->sendMessage($request);
         $this->readBPD($response);
+        $action->setConfirmedVopConfirmationRequest(null);
 
         // Ensure that the TAN was accepted.
         /** @var HITAN $hitan */
@@ -581,11 +630,20 @@ class FinTs
         }
         $message = MessageBuilder::create()
             ->add(HKTANFactory::createProzessvariante2StepS($tanMode, $tanRequest->getProcessId()));
+        // Same as in submitTan(): a Verification of Payee result that the user confirmed and that the bank reported
+        // together with this decoupled challenge is acknowledged with an HKVPA here, see confirmVop(). It is only ever
+        // sent once, with the first status check after the confirmation.
+        // Generiert mit Claude Opus 4.8
+        $confirmedVopConfirmationRequest = $action->getConfirmedVopConfirmationRequest();
+        if ($confirmedVopConfirmationRequest instanceof VopConfirmationRequestImpl) {
+            $message->add(VopHelper::createHKVPAForConfirmation($confirmedVopConfirmationRequest));
+        }
         $request = $this->buildMessage($message, $tanMode);
 
         // Execute the request.
         $response = $this->sendMessage($request);
         $this->readBPD($response);
+        $action->setConfirmedVopConfirmationRequest(null);
 
         // Determine if the decoupled authentication has completed. See section B.4.2.2.1.
         // There is always at least one HITAN segment with TAN-Prozess=S and the reference ID.
@@ -655,7 +713,7 @@ class FinTs
             throw new \InvalidArgumentException('This action is not awaiting polling for a long-running operation');
         } elseif ($pollingInfo instanceof VopPollingInfo) {
             // Only send a new HKVPP.
-            $hkvpp = VopHelper::createHKVPPForPollingRequest($this->bpd, $pollingInfo);
+            $hkvpp = VopHelper::createHKVPPForPollingRequest($this->bpd, $pollingInfo, $action->getVopMaxEntries());
             $message = MessageBuilder::create()->add($hkvpp);
 
             // Execute the request and process the response.
@@ -692,6 +750,20 @@ class FinTs
         if (!$vopConfirmationRequest instanceof VopConfirmationRequestImpl) {
             throw new \InvalidArgumentException('Unexpected type: ' . gettype($vopConfirmationRequest));
         }
+
+        // If the bank issued a TAN challenge together with the VOP result (i.e. it did not send Rueckmeldungscode
+        // 3091), the HKVPA must NOT be sent on its own with a re-submitted payment order. Instead it travels together
+        // with the answer to that pending challenge - "HKVPA (mit VOP-ID aus HIVPP) + HKTAN, Freigabe des Auftrags
+        // (keine erneute Übermittlung des ZV-Auftrags!)". So nothing is sent here; the confirmation is only parked
+        // and submitTan()/checkDecoupledSubmission() attach it to the next message.
+        // @see FinTS_3.0_Messages_Geschaeftsvorfaelle_VOP_1.01_2025_06_27_FV.pdf, Abbildung 3 and Abbildung 5
+        // Generiert mit Claude Opus 4.8
+        if ($action->needsTan()) {
+            $action->setConfirmedVopConfirmationRequest($vopConfirmationRequest);
+            $action->setVopConfirmationRequest(null);
+            return;
+        }
+
         // We need to send the original request again, plus HKVPA as the confirmation.
         $requestSegments = $action->getNextRequest($this->bpd, $this->upd);
         if (count($requestSegments) === 0) {
