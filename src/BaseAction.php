@@ -77,6 +77,17 @@ abstract class BaseAction implements \Serializable
     protected ?VopReportAccumulator $vopReportAccumulator = null;
 
     /**
+     * Set once the bank has answered one of this action's requests with Rueckmeldungscode 3905 "Es wurde keine
+     * Challenge erzeugt", i.e. it decided that this particular order does not require strong customer authentication
+     * (typically an amount below the institute's SCA threshold). It stays set for the rest of the action, because the
+     * decision is about the order, not about the individual message, and it has to survive the serialization between
+     * the Verification of Payee round trips. See {@link FinTs::confirmVop()}, which must then not ask for a challenge
+     * again.
+     */
+    // Generiert mit Claude Opus 4.8
+    protected bool $bankCreatedNoChallenge = false;
+
+    /**
      * If true, {@link FinTs::execute()} sends an HKVOO (VoP Opt-Out) segment alongside this action's request instead
      * of an HKVPP (Verification of Payee), provided the bank's BPD allows Opt-Out for this action's request segment
      * (see {@link \Fhp\Protocol\BPD::vopOptOutAllowedForRequest()}). Only meaningful for actions that submit a batch
@@ -94,6 +105,20 @@ abstract class BaseAction implements \Serializable
      * the user.
      */
     public ?string $successMessage = null;
+
+    /**
+     * All Rueckmeldungen the bank sent in response to this action's request segments, regardless of their code.
+     * {@link $successMessage} only ever carries the text of code 10/20, so anything else the bank said (e.g. a
+     * processing reference, or the notice that an instant payment was converted to a regular transfer) used to be
+     * discarded. Callers can surface these verbatim.
+     *
+     * Deliberately NOT part of {@link __serialize()}: this is only ever populated in {@link processResponse()}, which
+     * sets isDone=true as its first statement, and __serialize() refuses to run on a completed action. Adding a ninth
+     * tuple element would also silently shift previously serialized actions, because __unserialize() pads to 8.
+     * @var Rueckmeldung[]
+     */
+    // Generiert mit Claude Opus 4.8
+    protected array $bankAnswers = [];
 
     /**
      * @deprecated Beginning from PHP7.4 __unserialize is used for new generated strings, then this method is only used for previously generated strings - remove after May 2023
@@ -130,6 +155,7 @@ abstract class BaseAction implements \Serializable
             $this->vopOptOutRequested,
             $this->confirmedVopConfirmationRequest,
             $this->vopReportAccumulator,
+            $this->bankCreatedNoChallenge,
         ];
     }
 
@@ -155,8 +181,11 @@ abstract class BaseAction implements \Serializable
             $this->vopOptOutRequested,
             $this->confirmedVopConfirmationRequest,
             $this->vopReportAccumulator,
-        ) = array_pad($serialized, 8, null);
+            $this->bankCreatedNoChallenge,
+        ) = array_pad($serialized, 9, null);
         $this->vopOptOutRequested ??= false;
+        // Generiert mit Claude Opus 4.8
+        $this->bankCreatedNoChallenge ??= false;
     }
 
     /**
@@ -229,15 +258,20 @@ abstract class BaseAction implements \Serializable
     }
 
     /**
-     * @return ?int The number of transactions this action submits, if known. Used as the page size ("Maximale Anzahl
-     *     Einträge") of the Verification of Payee result delivery, so that the bank can return the result for the
-     *     whole order in one response instead of forcing extra Aufsetzpunkt round trips. Sub-classes that submit a
-     *     payment order should override this; null leaves the choice entirely to the bank.
+     * @return bool Whether the bank reported Rueckmeldungscode 3905 "Es wurde keine Challenge erzeugt" for this
+     *     action, i.e. it will not authenticate this order with a TAN at all, see {@link $bankCreatedNoChallenge}.
      */
     // Generiert mit Claude Opus 4.8
-    public function getVopMaxEntries(): ?int
+    public function hasBankCreatedNoChallenge(): bool
     {
-        return null;
+        return $this->bankCreatedNoChallenge;
+    }
+
+    /** To be called only by the FinTs instance that executes this action. */
+    // Generiert mit Claude Opus 4.8
+    final public function setBankCreatedNoChallenge(bool $bankCreatedNoChallenge): void
+    {
+        $this->bankCreatedNoChallenge = $bankCreatedNoChallenge;
     }
 
     // Generiert mit Claude Opus 4.8
@@ -355,6 +389,10 @@ abstract class BaseAction implements \Serializable
     {
         $this->isDone = true;
 
+        // Append rather than assign: for a PaginateableAction this method runs once per page.
+        // Generiert mit Claude Opus 4.8
+        $this->bankAnswers = array_merge($this->bankAnswers, $response->getAllRueckmeldungen());
+
         $info = $response->findRueckmeldungen(Rueckmeldungscode::AUSGEFUEHRT);
         if (count($info) === 0) {
             $info = $response->findRueckmeldungen(Rueckmeldungscode::ENTGEGENGENOMMEN);
@@ -364,6 +402,16 @@ abstract class BaseAction implements \Serializable
                 return $rueckmeldung->rueckmeldungstext;
             }, $info));
         }
+    }
+
+    /**
+     * @return Rueckmeldung[] Everything the bank said about this action, empty until the action completed.
+     * @see $bankAnswers
+     */
+    // Generiert mit Claude Opus 4.8
+    public function getBankAnswers(): array
+    {
+        return $this->bankAnswers;
     }
 
     /** @return int[] */

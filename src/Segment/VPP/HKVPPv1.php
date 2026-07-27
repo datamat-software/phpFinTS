@@ -17,7 +17,14 @@ class HKVPPv1 extends BaseSegment
 
     public ?Bin $pollingId = null;
 
-    /** Only allowed if {@link ParameterNamensabgleichPruefauftragV1::$eingabeAnzahlEintraegeErlaubt} says so. */
+    /**
+     * Only allowed if {@link ParameterNamensabgleichPruefauftragV1::$eingabeAnzahlEintraegeErlaubt} says so - but even
+     * banks that report "J" there reject the field in the HKVPP that accompanies the payment order (observed with
+     * Atruvia/GAD, which answers 9010 "Der Parameter 'maxNoEntries' ist nicht erlaubt" + 9210 "VOP-Auftrag ungültig",
+     * killing the order for good via 3945). It is therefore never populated; the field itself must stay declared,
+     * because it holds wire position 3 ahead of $aufsetzpunkt. See VopHelper::createHKVPPForInitialRequest().
+     */
+    // Generiert mit Claude Opus 4.8
     public ?int $maximaleAnzahlEintraege = null;
 
     /** For pagination. Max length: 35 */

@@ -86,6 +86,38 @@ abstract class Rueckmeldungscode
      */
     public const AUFSETZPUNKT = 3040;
 
+    /**
+     * "SEPA-Instant Payment Statusabfrage HKIPS veranlassen".
+     * Der Auftrag wurde angenommen, das endgültige interbankliche Ergebnis steht aber noch aus. Der Kunde kann im
+     * Anschluss den Geschäftsvorfall "SEPA-Instant Payment Status" (HKIPS) durchführen.
+     */
+    // Generiert mit Claude Opus 4.8
+    public const SEPA_INSTANT_STATUSABFRAGE_VERANLASSEN = 3045;
+
+    /**
+     * "Überprüfen Sie Ihre Umsätze."
+     * Es wird kein weiterer Status geliefert, der Kunde muss den Ausgang selbst über die Umsätze kontrollieren.
+     */
+    // Generiert mit Claude Opus 4.8
+    public const SEPA_INSTANT_UMSAETZE_PRUEFEN = 3046;
+
+    /**
+     * "Auftrag wird unter Referenz xxx verarbeitet".
+     * Die Bearbeitungsreferenz (z.B. für Reklamationsfälle) steht in rueckmeldungsparameter[0].
+     */
+    // Generiert mit Claude Opus 4.8
+    public const AUFTRAG_WIRD_UNTER_REFERENZ_VERARBEITET = 3070;
+
+    /**
+     * "Auftrag wird als Standard-SEPA-Überweisung bearbeitet".
+     * Die Zahlung war nicht als Echtzeitüberweisung anbringbar (z.B. Empfängerbank nicht Instant-Payment-fähig oder
+     * Limit nicht ausreichend) und wurde umgewandelt - nur möglich, wenn der Auftrag "Umwandlung nach
+     * SEPA-Überweisung zulässig" gesetzt hatte. Für umgewandelte Aufträge liefert die Statusabfrage keine weiteren
+     * Informationen zur Anbringung mehr.
+     */
+    // Generiert mit Claude Opus 4.8
+    public const AUSGEFUEHRT_ALS_STANDARD_SEPA_UEBERWEISUNG = 3270;
+
     public const VOP_KEINE_NAMENSABWEICHUNG = 25;
 
     public const VOP_ERGEBNIS_NAMENSABGLEICH_PRUEFEN = 3090;
@@ -123,6 +155,26 @@ abstract class Rueckmeldungscode
      * Kunde die Ausführung weiterhin wünscht.
      */
     public const FREIGABE_KANN_NICHT_ERTEILT_WERDEN = 3945;
+
+    /**
+     * Starke Kundenauthentifizierung nicht notwendig.
+     * The official code with which the bank announces up front that the order it just received does not require
+     * strong customer authentication (e.g. a "Bagatellbetrag" below the institute's SCA threshold), upon which the
+     * client stops sending HKTAN for it.
+     * @see FinTS_3.0_Messages_Geschaeftsvorfaelle_VOP_1.01_2025_06_27_FV.pdf, footnote to the VOP flow charts
+     */
+    // Generiert mit Claude Opus 4.8
+    public const STARKE_KUNDENAUTHENTIFIZIERUNG_NICHT_NOTWENDIG = 3076;
+
+    /**
+     * Es wurde keine Challenge erzeugt.
+     * Purely a statement about the message that was just answered, NOT about the order: Atruvia/GAD sends it together
+     * with {@link FREIGABE_KANN_NICHT_ERTEILT_WERDEN} whenever a Verification of Payee still has to complete, and it
+     * does so regardless of the amount (observed for 2,00 EUR and for 250,00 EUR alike). It therefore must not be
+     * mistaken for {@link STARKE_KUNDENAUTHENTIFIZIERUNG_NICHT_NOTWENDIG}, which is the actual "no SCA needed" signal.
+     */
+    // Generiert mit Claude Opus 4.8
+    public const KEINE_CHALLENGE_ERZEUGT = 3905;
 
     /**
      * Starke Kundenauthentifizierung noch ausstehend.

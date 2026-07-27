@@ -20,23 +20,15 @@ use Fhp\UnsupportedException;
  */
 class VopHelper
 {
-    /** Maximum value that fits into HKVPPv1::$maximaleAnzahlEintraege (DE num ..4 per the spec). */
-    // Generiert mit Claude Opus 4.8
-    private const MAX_ANZAHL_EINTRAEGE = 9999;
-
     /** The VOP status codes a bank may use to prefix a group-level explanatory text, see {@link extractGroupInformationTexts()}. */
     // Generiert mit Claude Opus 4.8
     private const VOP_STATUS_CODES = ['RCVC', 'RVMC', 'RVNM', 'RVCM', 'RVNA', 'PDNG'];
 
     /**
      * @param BPD $bpd The BPD.
-     * @param int|null $maxEntries The number of transactions in the payment order this HKVPP accompanies, used as the
-     *     page size for the VOP result delivery ("Maximale Anzahl Einträge"), so that the bank can return the whole
-     *     result in one response instead of forcing extra Aufsetzpunkt round trips. Only sent if the bank allows it
-     *     ("Eingabe Anzahl Einträge erlaubt" in HIVPPS). Pass null to leave the choice entirely to the bank.
      * @return HKVPPv1 A segment to prompt the server to do Verification of Payee.
      */
-    public static function createHKVPPForInitialRequest(BPD $bpd, ?int $maxEntries = null): HKVPPv1
+    public static function createHKVPPForInitialRequest(BPD $bpd): HKVPPv1
     {
         // For now just pretend we support all formats.
         /** @var HIVPPSv1 $hivpps */
@@ -46,22 +38,19 @@ class VopHelper
         $hkvpp = HKVPPv1::createEmpty();
         $hkvpp->unterstuetztePaymentStatusReports->paymentStatusReportDescriptor = $supportedFormats;
         // Both "V" (vollständig) and "S" (schrittweise) delivery are supported, see VopReportAccumulator.
+        // Note: "Maximale Anzahl Einträge" is deliberately never populated, see HKVPPv1::$maximaleAnzahlEintraege.
         // Generiert mit Claude Opus 4.8
-        if ($maxEntries !== null && $maxEntries > 0 && $hivpps->parameter->eingabeAnzahlEintraegeErlaubt) {
-            $hkvpp->maximaleAnzahlEintraege = min($maxEntries, static::MAX_ANZAHL_EINTRAEGE);
-        }
         return $hkvpp;
     }
 
     /**
      * @param BPD $bpd The BPD.
      * @param VopPollingInfo $pollingInfo The polling info we got from the immediately preceding request.
-     * @param int|null $maxEntries See {@link createHKVPPForInitialRequest()}.
      * @return HKVPPv1 A segment to poll the server for the completion of Verification of Payee.
      */
-    public static function createHKVPPForPollingRequest(BPD $bpd, VopPollingInfo $pollingInfo, ?int $maxEntries = null): HKVPPv1
+    public static function createHKVPPForPollingRequest(BPD $bpd, VopPollingInfo $pollingInfo): HKVPPv1
     {
-        $hkvpp = static::createHKVPPForInitialRequest($bpd, $maxEntries);
+        $hkvpp = static::createHKVPPForInitialRequest($bpd);
         $hkvpp->aufsetzpunkt = $pollingInfo->getAufsetzpunkt();
         $hkvpp->pollingId = $pollingInfo->getPollingId();
         return $hkvpp;

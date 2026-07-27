@@ -287,6 +287,19 @@ class FinTs
      * @throws ServerException When the server responds with a (FinTS-encoded) error message, which includes most things
      *     that can go wrong with the action itself, like wrong credentials, invalid IBANs, locked accounts, etc.
      */
+    /**
+     * @return bool Whether this instance continues a bank dialog that is still open, i.e. it was restored from a
+     *     {@link persist()}ed instance on which {@link close()} had not been called. In that case {@link login()} must
+     *     not be called again - it would open a second dialog, and everything the bank holds for the first one is lost
+     *     with it, e.g. a payment order that is kept there ("zwischengespeichert") while a Verification of Payee is
+     *     still pending.
+     */
+    // Generiert mit Claude Opus 4.8
+    public function hasOpenDialog(): bool
+    {
+        return $this->dialogId !== null;
+    }
+
     public function login(): DialogInitialization
     {
         $this->requireTanMode();
@@ -370,7 +383,7 @@ class FinTs
             $hkvoo = VooHelper::createHKVOOForRequest();
             $message->add($hkvoo);
         } elseif ($this->bpd?->vopRequiredForRequest($requestSegments) !== null) {
-            $hkvpp = VopHelper::createHKVPPForInitialRequest($this->bpd, $action->getVopMaxEntries());
+            $hkvpp = VopHelper::createHKVPPForInitialRequest($this->bpd);
             $message->add($hkvpp);
         }
 
@@ -419,6 +432,18 @@ class FinTs
                 $action->setDialogId($response->header->dialogId);
                 $action->setMessageNumber($this->messageNumber);
             }
+        }
+
+        // Remember when the bank tells us that it does not authenticate this order with a TAN at all ("Bagatellbetrag",
+        // see the footnote of the VOP flow charts) - it stays true for the rest of the action, because that decision is
+        // about the order, not about this single message. Only 3076 says this; 3905 "Es wurde keine Challenge erzeugt"
+        // does NOT, it merely reports that this one message produced no challenge and accompanies every 3945 while a
+        // Verification of Payee is still pending, irrespective of the amount. DialogInitialization is excluded because
+        // practically every bank answers the login's own HKTAN with 3076, which says nothing about any payment order.
+        // Generiert mit Claude Opus 4.8
+        if (!$action instanceof DialogInitialization
+            && $response->findRueckmeldung(Rueckmeldungscode::STARKE_KUNDENAUTHENTIFIZIERUNG_NICHT_NOTWENDIG) !== null) {
+            $action->setBankCreatedNoChallenge(true);
         }
 
         // Detect if the bank needs us to do something for Verification of Payee.
@@ -713,7 +738,7 @@ class FinTs
             throw new \InvalidArgumentException('This action is not awaiting polling for a long-running operation');
         } elseif ($pollingInfo instanceof VopPollingInfo) {
             // Only send a new HKVPP.
-            $hkvpp = VopHelper::createHKVPPForPollingRequest($this->bpd, $pollingInfo, $action->getVopMaxEntries());
+            $hkvpp = VopHelper::createHKVPPForPollingRequest($this->bpd, $pollingInfo);
             $message = MessageBuilder::create()->add($hkvpp);
 
             // Execute the request and process the response.
@@ -764,32 +789,58 @@ class FinTs
             return;
         }
 
-        // We need to send the original request again, plus HKVPA as the confirmation.
+        // Abbildung 4 spells out this message: "HKVPA (mit VOP-ID aus HIVPP) + HKxxx + HKTAN mit Challenge-Anforderung
+        // (weitere Signatur folgt: N)", in that segment order. The order really has to be in it - Atruvia/GAD answers
+        // an HKVPA on its own with "9010 Erneute Auftragseinreichung für VOP-Bestätigung notwendig", and it does so
+        // even inside the very dialog in which the order was submitted, so the "Auftrag wird zwischengespeichert" of
+        // the diagram cannot be relied upon.
+        //
+        // The order is re-submitted completely UNCHANGED - the bank compares it against the one it stored for the
+        // Verification of Payee and answers "9010 Auftrag weicht vom Ursprungsauftrag ab" on any deviation, which
+        // matches the note in the diagram that the customer confirms "den original eingereichten Auftrag trotz
+        // Namensabweichung". In particular the pain must keep its MsgId, PmtInfId and CreDtTm: renewing them (an
+        // earlier attempt at getting past "3999 Pain Nachricht nicht zugelassen") is exactly what triggers that
+        // deviation error. The SEPA descriptor has to stay stable across both messages for the same reason - see
+        // FintsTransferTrait::selectBestSepaUrn() on the DWS side.
+        //
+        // The HKTAN carries "weitere Signatur folgt: N" per Abbildung 4 - the base FinTS spec leaves that field
+        // unpopulated for TAN-Prozess 4, but the VOP flow asks for it explicitly. It is omitted only when the bank
+        // has told us that this order needs no strong customer authentication at all (Rueckmeldungscode 3076, the
+        // "Bagatellbetrag" footnote of the flow charts).
+        // @see FinTS_3.0_Messages_Geschaeftsvorfaelle_VOP_1.01_2025_06_27_FV.pdf, Section E.8.1.1.2, Abbildung 4
+        // Generiert mit Claude Opus 4.8
+        $hkvpa = VopHelper::createHKVPAForConfirmation($vopConfirmationRequest);
         $requestSegments = $action->getNextRequest($this->bpd, $this->upd);
         if (count($requestSegments) === 0) {
             throw new \AssertionError('Request unexpectedly became empty upon VOP confirmation');
         }
-        $message = MessageBuilder::create()
-            ->add($requestSegments)
-            ->add(VopHelper::createHKVPAForConfirmation($vopConfirmationRequest));
+        $message = MessageBuilder::create()->add($hkvpa)->add($requestSegments);
 
-        // Add HKTAN for authentication if necessary.
-        if (!$this->getSelectedTanMode() instanceof NoPsd2TanMode) {
+        if (!$this->getSelectedTanMode() instanceof NoPsd2TanMode && !$action->hasBankCreatedNoChallenge()) {
             if (($needTanForSegment = $action->getNeedTanForSegment()) !== null) {
-                $message->add(HKTANFactory::createProzessvariante2Step1(
-                    $this->requireTanMode(), $this->selectedTanMedium, $needTanForSegment));
+                $hktan = HKTANFactory::createProzessvariante2Step1(
+                    $this->requireTanMode(), $this->selectedTanMedium, $needTanForSegment);
+                if ($hktan instanceof HKTAN) {
+                    $hktan->setWeitereTanFolgt(false);
+                }
+                $message->add($hktan);
             }
         }
 
-        // Construct the request message and tell the action about the segment numbers that were assigned.
+        // Construct the request message and tell the action about the segment numbers that were assigned. The HKVPA
+        // counts as one of the action's request segments here, because the bank may anchor its feedback about the
+        // released order on it ("0020 Ausführungsbestätigung nach Namensabgleich erhalten") instead of on the order
+        // segment - and the accompanying "0010 Nachricht entgegengenommen" sits in HIRMG without any reference
+        // segment, so filterByReferenceSegments() drops it.
+        // Generiert mit Claude Opus 4.8
         $request = $this->buildMessage($message, $this->getSelectedTanMode()); // This fills in the segment numbers.
         $action->setRequestSegmentNumbers(array_map(function ($segment) {
             /* @var BaseSegment $segment */
             return $segment->getSegmentNumber();
-        }, $requestSegments));
+        }, array_merge($requestSegments, [$hkvpa])));
 
         // Execute the request and process the response.
-        $response = $this->sendMessage($this->buildMessage($message, $this->getSelectedTanMode()));
+        $response = $this->sendMessage($request);
         $action->setVopConfirmationRequest(null);
         $this->processServerResponse($action, $response);
     }

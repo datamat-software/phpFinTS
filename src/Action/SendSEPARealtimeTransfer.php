@@ -12,6 +12,7 @@ use Fhp\Segment\Common\Kti;
 use Fhp\Segment\HIRMS\Rueckmeldung;
 use Fhp\Segment\HIRMS\Rueckmeldungscode;
 use Fhp\Segment\IPZ\HIIPZSv1;
+use Fhp\Segment\IPZ\HIIPZv1; // Generiert mit Claude Opus 4.8
 use Fhp\Segment\IPZ\HIIPZSv2;
 use Fhp\Segment\IPZ\HKIPZv1;
 use Fhp\Segment\IPZ\HKIPZv2;
@@ -33,7 +34,17 @@ class SendSEPARealtimeTransfer extends BaseAction
     private $xmlSchema;
     private bool $allowConversionToSEPATransfer = true;
 
-    // There are no result fields. This action is simply marked as done to indicate that the transfer was executed.
+    // Result fields, populated in processResponse() from the HIIPZ segment and the bank's Rueckmeldungen.
+    // Deliberately NOT part of __serialize()/__unserialize(): processResponse() sets isDone=true as its first
+    // statement and __serialize() refuses to run on a completed action, so these can never need to survive
+    // serialization.
+    // Generiert mit Claude Opus 4.8
+    private ?string $auftragsidentifikation = null;
+    private ?int $statusSepaAuftrag = null;
+    private ?int $sepaCCode = null;
+    private bool $convertedToSepaTransfer = false;
+    private bool $statusQueryAdvised = false;
+    private ?string $processingReference = null;
 
     /**
      * @param SEPAAccount $account The account from which the transfer will be sent.
@@ -140,9 +151,29 @@ class SendSEPARealtimeTransfer extends BaseAction
     {
         parent::processResponse($response);
 
-        // Was the instant payment converted to a regular transfer?
-        $info = $response->findRueckmeldungen(3270);
+        // Everything below has to be extracted BEFORE the 3270 early return, otherwise a converted order silently
+        // loses its Auftragsidentifikation and processing reference.
+        // Generiert mit Claude Opus 4.8
+        $hiipz = $response->findSegment(HIIPZv1::class); // matches HIIPZv2 too, which is an empty subclass
+        if ($hiipz !== null) {
+            $this->auftragsidentifikation = $hiipz->auftragsidentifikation;
+            $this->statusSepaAuftrag = $hiipz->statusSepaAuftrag;
+            $this->sepaCCode = $hiipz->sepaCCode;
+        }
+
+        $this->statusQueryAdvised =
+            $response->findRueckmeldung(Rueckmeldungscode::SEPA_INSTANT_STATUSABFRAGE_VERANLASSEN) !== null;
+
+        $referenz = $response->findRueckmeldung(Rueckmeldungscode::AUFTRAG_WIRD_UNTER_REFERENZ_VERARBEITET);
+        if ($referenz !== null && !empty($referenz->rueckmeldungsparameter)) {
+            $this->processingReference = $referenz->rueckmeldungsparameter[0];
+        }
+
+        // Was the instant payment converted to a regular transfer? The early return is intentional: a converted
+        // order is not guaranteed to also carry 0010/0020, so falling through would throw below.
+        $info = $response->findRueckmeldungen(Rueckmeldungscode::AUSGEFUEHRT_ALS_STANDARD_SEPA_UEBERWEISUNG);
         if (count($info) > 0) {
+            $this->convertedToSepaTransfer = true; // Generiert mit Claude Opus 4.8
             $this->successMessage = implode("\n", array_map(function (Rueckmeldung $rueckmeldung) {
                 return $rueckmeldung->rueckmeldungstext;
             }, $info));
@@ -153,5 +184,54 @@ class SendSEPARealtimeTransfer extends BaseAction
             && $response->findRueckmeldung(Rueckmeldungscode::AUSGEFUEHRT) === null) {
             throw new UnexpectedResponseException('Bank did not confirm SEPATransfer execution');
         }
+    }
+
+    /**
+     * @return string|null The bank's order identification (HIIPZ), needed for a later status query (HKIPS). May be
+     *     null: the segment usually arrives in the TAN submission response, which is filtered by the *original*
+     *     request segment numbers, so callers must tolerate its absence rather than treating it as an error.
+     */
+    // Generiert mit Claude Opus 4.8
+    public function getAuftragsidentifikation(): ?string
+    {
+        return $this->auftragsidentifikation;
+    }
+
+    /** @return int|null "Status SEPA-Auftrag" (1..9) from HIIPZ, or null if the bank did not report one. */
+    // Generiert mit Claude Opus 4.8
+    public function getStatusSepaAuftrag(): ?int
+    {
+        return $this->statusSepaAuftrag;
+    }
+
+    /** @return int|null "SEPA-C-Code" from HIIPZ (3: Delete, 4: Recall), or null. */
+    // Generiert mit Claude Opus 4.8
+    public function getSepaCCode(): ?int
+    {
+        return $this->sepaCCode;
+    }
+
+    /**
+     * @return bool Whether the bank reported (3270) that it executed the order as a regular SEPA transfer instead of
+     *     an instant payment. The user has to check their account statement, since no instant status is available.
+     */
+    // Generiert mit Claude Opus 4.8
+    public function wasConvertedToSepaTransfer(): bool
+    {
+        return $this->convertedToSepaTransfer;
+    }
+
+    /** @return bool Whether the bank advised (3045) to run a SEPA Instant Payment status query (HKIPS). */
+    // Generiert mit Claude Opus 4.8
+    public function isStatusQueryAdvised(): bool
+    {
+        return $this->statusQueryAdvised;
+    }
+
+    /** @return string|null The bank's processing reference (3070), e.g. for complaints. */
+    // Generiert mit Claude Opus 4.8
+    public function getProcessingReference(): ?string
+    {
+        return $this->processingReference;
     }
 }

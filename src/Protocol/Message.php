@@ -223,6 +223,24 @@ class Message
     }
 
     /**
+     * Unlike {@link findRueckmeldungen()}, this returns *all* Rueckmeldungen regardless of their code, so that a
+     * caller can pass the bank's own wording on to the end user instead of only reacting to the handful of codes
+     * this library happens to know about.
+     * @return Rueckmeldung[] All Rueckmeldungen in this message, in segment order.
+     */
+    // Generiert mit Claude Opus 4.8
+    public function getAllRueckmeldungen(): array
+    {
+        $rueckmeldungen = [];
+        foreach ($this->plainSegments as $segment) {
+            if ($segment instanceof RueckmeldungContainer) {
+                $rueckmeldungen = array_merge($rueckmeldungen, $segment->getAllRueckmeldungen());
+            }
+        }
+        return $rueckmeldungen;
+    }
+
+    /**
      * @param int $requestSegmentNumber Only consider Rueckmeldungen that pertain to this request segment.
      * @return int[] The codes of all the Rueckmeldung instances matching the request segment.
      */
