@@ -36,10 +36,14 @@ class GetStatementOfAccountXML extends PaginateableAction
     private $camtURN;
     /** @var bool */
     private $allAccounts;
+    /** @var bool */
+    private $includeUnbooked;
 
     // Response
     /** @var string[] */
     protected $xml = [];
+    /** @var string[] */
+    protected $unbookedXml = [];
 
     /**
      * @param SEPAAccount $account The account to get the statement for. This can be constructed based on information
@@ -51,9 +55,11 @@ class GetStatementOfAccountXML extends PaginateableAction
      *     For example urn:iso:std:iso:20022:tech:xsd:camt.052.001.02
      * @param bool $allAccounts If set to true, will return statements for all accounts of the user. You still need to
      *     pass one of the accounts into $account, though.
+     * @param bool $includeUnbooked If set to true, also requests the not-yet-booked (pending) transactions, which the
+     *     bank returns as a separate camt.052 XML document, retrievable via {@link getUnbookedXML()}.
      * @return GetStatementOfAccountXML A new action instance.
      */
-    public static function create(SEPAAccount $account, ?\DateTime $from = null, ?\DateTime $to = null, ?string $camtURN = null, bool $allAccounts = false): GetStatementOfAccountXML
+    public static function create(SEPAAccount $account, ?\DateTime $from = null, ?\DateTime $to = null, ?string $camtURN = null, bool $allAccounts = false, bool $includeUnbooked = false): GetStatementOfAccountXML
     {
         if ($from !== null && $to !== null && $from > $to) {
             throw new \InvalidArgumentException('From-date must be before to-date');
@@ -65,6 +71,7 @@ class GetStatementOfAccountXML extends PaginateableAction
         $result->from = $from;
         $result->to = $to;
         $result->allAccounts = $allAccounts;
+        $result->includeUnbooked = $includeUnbooked;
         return $result;
     }
 
@@ -80,7 +87,7 @@ class GetStatementOfAccountXML extends PaginateableAction
     {
         return [
             parent::__serialize(),
-            $this->account, $this->camtURN, $this->from, $this->to, $this->allAccounts,
+            $this->account, $this->camtURN, $this->from, $this->to, $this->allAccounts, $this->includeUnbooked,
         ];
     }
 
@@ -99,7 +106,7 @@ class GetStatementOfAccountXML extends PaginateableAction
     {
         list(
             $parentSerialized,
-            $this->account, $this->camtURN, $this->from, $this->to, $this->allAccounts,
+            $this->account, $this->camtURN, $this->from, $this->to, $this->allAccounts, $this->includeUnbooked,
         ) = $serialized;
 
         is_array($parentSerialized) ?
@@ -114,6 +121,16 @@ class GetStatementOfAccountXML extends PaginateableAction
     {
         $this->ensureDone();
         return $this->xml;
+    }
+
+    /**
+     * @return string[] The not-yet-booked (pending) XML-Document(s) received from the bank, if requested via
+     *     $includeUnbooked, or empty array if none were returned/requested.
+     */
+    public function getUnbookedXML(): array
+    {
+        $this->ensureDone();
+        return $this->unbookedXml;
     }
 
     protected function createRequest(BPD $bpd, ?UPD $upd)
@@ -169,12 +186,15 @@ class GetStatementOfAccountXML extends PaginateableAction
         if ($numResponseSegments < count($this->getRequestSegmentNumbers())) {
             throw new UnexpectedResponseException("Only got $numResponseSegments HICAZ response segments!");
         }
-        if ($numResponseSegments > 1) {
-            throw new UnsupportedException('More than 1 HICAZ response segment is not supported at the moment!');
-        }
-        // It seems that paginated responses, always contain a whole XML Document
-        foreach ($responseHicaz[0]->getGebuchteUmsaetze() as $xml_string) {
-            $this->xml[] = $xml_string;
+        // The bank sends one HICAZ segment per account when allAccounts is used, so all of them need to be collected.
+        // It seems that paginated responses always contain a whole XML Document.
+        foreach ($responseHicaz as $hicaz) {
+            foreach ($hicaz->getGebuchteUmsaetze() as $xml_string) {
+                $this->xml[] = $xml_string;
+            }
+            if ($this->includeUnbooked && $hicaz->getNichtGebuchteUmsaetze() !== null) {
+                $this->unbookedXml[] = $hicaz->getNichtGebuchteUmsaetze()->getData();
+            }
         }
     }
 }

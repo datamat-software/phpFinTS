@@ -181,7 +181,7 @@ class GetStatementOfAccount extends PaginateableAction
             }
         } catch (UnexpectedResponseException|UnsupportedException $e) {
             // MT940 format not supported, fall back to XML format (HICAZS)
-            $this->xmlAction = GetStatementOfAccountXML::create($this->account, $this->from, $this->to, null, $this->allAccounts);
+            $this->xmlAction = GetStatementOfAccountXML::create($this->account, $this->from, $this->to, null, $this->allAccounts, $this->includeUnbooked);
             return $this->xmlAction->createRequest($bpd, $upd);
         }
     }
@@ -253,6 +253,9 @@ class GetStatementOfAccount extends PaginateableAction
         }
 
         $xmlStrings = $this->xmlAction->getBookedXML();
+        if ($this->includeUnbooked) {
+            $xmlStrings = array_merge($xmlStrings, $this->xmlAction->getUnbookedXML());
+        }
         if (empty($xmlStrings)) {
             // No transactions available
             $this->statement = new StatementOfAccount();

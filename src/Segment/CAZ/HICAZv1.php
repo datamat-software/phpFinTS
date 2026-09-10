@@ -54,8 +54,8 @@ class HICAZv1 extends BaseSegment
         return $this->gebuchteUmsaetze->getData();
     }
 
-    public function getNichtGebuchteUmsaetze(): string
+    public function getNichtGebuchteUmsaetze(): ?Bin
     {
-        return $this->nichtGebuchteUmsaetze->getData();
+        return $this->nichtGebuchteUmsaetze;
     }
 }
